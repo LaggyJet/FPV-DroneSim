@@ -69,17 +69,22 @@ void UScanSurrounding::HandleSpinning() {
 void UScanSurrounding::HandleScan(FVector StartPoint) {
     TArray<FVector> Points;
     Points.Add(StartPoint);
-    while (bIsScanning) {
+    while(bIsScanning) {
         AActor* Owner = GetOwner();
         if (!Owner || IsBeingDestroyed()) break;
         const FVector StartLocation = Owner->GetActorLocation();
         const FVector Forward = Owner->GetActorRightVector();
-        const float ConeHalfAngleDegrees = 15.0f;
         const float RayLength = 800.f;
+        const float VerticalFOV = 60.f; 
+        const float PitchStep = 1.0f;   
         UWorld* World = GetWorld();
         if (!World) break;
-        const FVector RandomDir = FMath::VRandCone(Forward, FMath::DegreesToRadians(ConeHalfAngleDegrees));
-        const FVector End = StartLocation + RandomDir * RayLength;
+        static float CurrentPitch = -VerticalFOV * 0.5f;
+        if (CurrentPitch > VerticalFOV * 0.5f)
+            CurrentPitch = -VerticalFOV * 0.5f;
+        FRotator RotationOffset(CurrentPitch, 0.f, 0.f); 
+        FVector ScanDir = RotationOffset.RotateVector(Forward);
+        FVector End = StartLocation + ScanDir * RayLength;
         FHitResult Hit;
         FCollisionQueryParams Params;
         Params.AddIgnoredActor(Owner);
@@ -88,12 +93,13 @@ void UScanSurrounding::HandleScan(FVector StartPoint) {
         #if WITH_EDITOR
                 if (GEngine) {
                     AsyncTask(ENamedThreads::GameThread, [World, StartLocation, End, Hit]() {
-                        DrawDebugLine(World, StartLocation, End, FColor::Green, false, 0.05f);
+                        DrawDebugLine(World, StartLocation, End, FColor::Blue, false, 0.05f);
                         if (Hit.bBlockingHit)
                             DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, 0.05f);
                     });
                 }
         #endif
+        CurrentPitch += PitchStep;
     }
     FString CsvPath = FPaths::ProjectContentDir() / TEXT("Scripts/scan_points.csv");
     FString CsvContent = TEXT("X,Y,Z\n");
@@ -102,7 +108,7 @@ void UScanSurrounding::HandleScan(FVector StartPoint) {
     FFileHelper::SaveStringToFile(CsvContent, *CsvPath);
     FString PythonExe = FPaths::ProjectContentDir() / TEXT("ThirdParty/Python/python.exe");
     FString ScriptPath = FPaths::ProjectContentDir() / TEXT("Scripts/CreateScan.py");
-    FString Params = FString::Printf(TEXT("\"%s\""), *ScriptPath);
+    FString Params = FString::Printf(TEXT("\"%s\" %d"), *ScriptPath, ScanCounter);
     void* PipeRead = nullptr;
     void* PipeWrite = nullptr;
     FPlatformProcess::CreatePipe(PipeRead, PipeWrite);
@@ -116,4 +122,5 @@ void UScanSurrounding::HandleScan(FVector StartPoint) {
     Output += FPlatformProcess::ReadPipe(PipeRead);
     FPlatformProcess::ClosePipe(PipeRead, nullptr);
     UE_LOG(LogTemp, Warning, TEXT("Python Output: %s"), *Output);
+    ScanCounter++;
 }

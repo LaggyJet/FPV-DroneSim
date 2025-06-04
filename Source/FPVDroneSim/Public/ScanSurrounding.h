@@ -44,6 +44,7 @@ class FPVDRONESIM_API UScanSurrounding : public USceneComponent {
 		TSet<int32> VisitedAngles;
 		const float SegmentSizeDegrees = 10.0f;
 		const int32 RequiredSegmentCount = 360 / SegmentSizeDegrees;
+		int32 ScanCounter = 0;
 
 		void HandleSpinning();
 		void HandleScan(FVector StartPoint);
