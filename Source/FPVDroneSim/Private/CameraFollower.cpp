@@ -53,21 +53,4 @@ void UCameraFollower::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	FRotator NewRotation = FRotator(InitialPitch, NewYaw, InitialRoll);
 
 	TargetCamera->SetWorldRotation(NewRotation);
-
-	// Calculate new yaw = pawn yaw + initial camera yaw offset
-	float NewYaw = PawnYaw + (InitialYaw - PawnYaw);
-
-	// Actually, better just keep initial yaw offset relative to pawn:
-	NewYaw = PawnYaw + (InitialYaw - PawnYaw);
-
-	// But this simplifies to just initial yaw (which is wrong),
-	// so better approach is:
-
-	NewYaw = PawnYaw + InitialYawOffset;
-
-	// We'll store InitialYawOffset at BeginPlay:
-
-	// So let's fix this by adding a variable:
-
-	// --- Solution below ---
 }
