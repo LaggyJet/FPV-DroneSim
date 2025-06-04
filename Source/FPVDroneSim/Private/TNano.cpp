@@ -1,241 +1,230 @@
 #include "TNano.h"
 
-// Constructor
+constexpr float LiftScale = 7.89f;
+constexpr float YawTorqueStrength = 25.0f;
+constexpr float PitchTorqueStrength = 25.0f;
+constexpr float RollTorqueStrength = 25.0f;
+
+constexpr float MaxYawRateRad = FMath::DegreesToRadians(4.5f);   // Z axis
+constexpr float MaxPitchRateRad = FMath::DegreesToRadians(5.0f); // X axis
+constexpr float MaxRollRateRad = FMath::DegreesToRadians(5.0f);  // Y axis
+
 UTNano::UTNano()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-
-	// Initialize other values as needed
-	for (int i = 0; i < 4; ++i)
-	{
-		MotorThrottle[i] = 0.0f;
-		MotorThrust[i] = 0.0f;
-	}
-
-	MotorPositions[0] = GetMotorOffsetFromCenter(ArmLength, -45.0f);   // Front right
-	MotorPositions[1] = GetMotorOffsetFromCenter(ArmLength, 45.0f);  // Back right
-	MotorPositions[2] = GetMotorOffsetFromCenter(ArmLength, 135.0f);  // Back left
-	MotorPositions[3] = GetMotorOffsetFromCenter(ArmLength, -135.0f);  // Front left
-
-	if (KV > 0.0f && Voltage > 0.0f)
-	{
-		MaxRPMs = KV * Voltage;
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("KV or Voltage not set. MaxRPMs will be zero!"));
-	}
 }
 
-// Called when the game starts
 void UTNano::BeginPlay()
 {
 	Super::BeginPlay();
-	UE_LOG(LogTemp, Warning, TEXT("NanoController BeginPlay called"));
-
-	SetComponentTickEnabled(true);
-
-	if (!DroneBody)
-	{
-		DroneBody = Cast<UStaticMeshComponent>(GetOwner()->GetComponentByClass(UStaticMeshComponent::StaticClass()));
-		if (!DroneBody)
-		{
-			UE_LOG(LogTemp, Error, TEXT("DroneBody is null! Physics won't simulate."));
-		}
-	}
+	DroneBody->SetSimulatePhysics(true);
 
 	APlayerController* PC = Cast<APlayerController>(GetWorld()->GetFirstPlayerController());
-
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
 	// Add Mapping Context
-	if (PC)
+	if (PC && Subsystem)
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
-		{
-			if (IMC_DroneControllerContext)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Adding Mapping Context..."));
-				//UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
-				Subsystem->AddMappingContext(IMC_DroneControllerContext, 0);
-
-			}
-			else
-			{
-				UE_LOG(LogTemp, Error, TEXT("IMC_DroneControllerContext is null!"));
-			}
-		}
+		Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
+		Subsystem->AddMappingContext(IMC_TNano, 0);
 	}
 
-	// Enable input for the actor this component is attached to
-	if (PC && GetOwner())
-	{
-		GetOwner()->EnableInput(PC);
-		UE_LOG(LogTemp, Warning, TEXT("Input enabled for: %s"), *GetOwner()->GetName());
 
-		PC->SetInputMode(FInputModeGameOnly());
-		PC->bShowMouseCursor = false;
-	}
-
-	// Bind inputs
 	GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UTNano::SetupInput);
-
 }
 
 void UTNano::SetupInput()
 {
 	APlayerController* PC = Cast<APlayerController>(GetWorld()->GetFirstPlayerController());
-	if (!PC)
-	{
-		UE_LOG(LogTemp, Error, TEXT("No PlayerController found"));
-		return;
-	}
+	auto* InputComp = Cast<UEnhancedInputComponent>(PC->InputComponent);
 
-	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(PC->InputComponent);
-	if (!EnhancedInput)
-	{
-		UE_LOG(LogTemp, Error, TEXT("InputComponent is NOT EnhancedInputComponent!"));
-		return;
-	}
-
-	UE_LOG(LogTemp, Warning, TEXT("EnhancedInputComponent found, binding actions"));
-
-	if (IA_MoveLGimble)
-	{
-		EnhancedInput->BindAction(IA_MoveLGimble, ETriggerEvent::Triggered, this, &UTNano::OnMoveLGimble);
-	}
-	if (IA_MoveRGimble)
-	{
-		EnhancedInput->BindAction(IA_MoveRGimble, ETriggerEvent::Triggered, this, &UTNano::OnMoveRGimble);
-	}
+	if (IA_Throttle) InputComp->BindAction(IA_Throttle, ETriggerEvent::Triggered, this, &UTNano::OnThrottle);
+	if (IA_Pitch)    InputComp->BindAction(IA_Pitch, ETriggerEvent::Triggered, this, &UTNano::OnPitch);
+	if (IA_Roll)     InputComp->BindAction(IA_Roll, ETriggerEvent::Triggered, this, &UTNano::OnRoll);
+	if (IA_Yaw)      InputComp->BindAction(IA_Yaw, ETriggerEvent::Triggered, this, &UTNano::OnYaw);
 }
 
-void UTNano::OnMoveLGimble(const FInputActionInstance& Instance)
+void UTNano::OnThrottle(const FInputActionInstance& Instance)
 {
-	FVector2D Input = Instance.GetValue().Get<FVector2D>();
-	LeftGimbleLateral = Input.X;
-	LeftGimbleLongitudal = Input.Y;
-
-	UE_LOG(LogTemp, Warning, TEXT("Left Gimble: X=%f, Y=%f"), Input.X, Input.Y);
+    float throttle = 1 - Instance.GetValue().GetMagnitude();
+    if (throttle > 1)
+        Throttle = FMath::GetMappedRangeValueClamped(FVector2D(0, 2), FVector2D(0, 1), throttle);
+    else
+	    Throttle = FMath::Clamp(1.0f - Instance.GetValue().GetMagnitude(), 0.0f, 1.0f);
+    UE_LOG(LogTemp, Warning, TEXT("Throttle: %.2f"), throttle);
+    UE_LOG(LogTemp, Warning, TEXT("ThrottleClamped: %.2f"), Throttle);
 }
 
-void UTNano::OnMoveRGimble(const FInputActionInstance& Instance)
+void UTNano::OnPitch(const FInputActionInstance& Instance)
 {
-	FVector2D Input = Instance.GetValue().Get<FVector2D>();
-	RightGimbleLateral = Input.X;
-	RightGimbleLongitudal = Input.Y;
-
-	UE_LOG(LogTemp, Warning, TEXT("Right Gimble: X=%f, Y=%f"), Input.X, Input.Y);
+	Pitch = FMath::Clamp(Instance.GetValue().GetMagnitude() * 2.0f - 1.0f, -1.0f, 1.0f);
 }
 
-// Called every frame
+void UTNano::OnRoll(const FInputActionInstance& Instance)
+{
+	Roll = FMath::Clamp(Instance.GetValue().GetMagnitude() * 2.0f - 1.0f, -1.0f, 1.0f);
+}
+
+void UTNano::OnYaw(const FInputActionInstance& Instance)
+{
+	Yaw = FMath::Clamp(Instance.GetValue().GetMagnitude() * 2.0f - 1.0f, -1.0f, 1.0f);
+}
+
 void UTNano::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
-	//UE_LOG(LogTemp, Warning, TEXT("NanoController TickComponent called"));
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	SimulatePhysics();
-
-	APlayerController* PC = Cast<APlayerController>(GetOwner()->GetInstigatorController());
-	if (PC)
-	{
-		float LX = 0.0f;
-		float LY = 0.0f;
-		//PC->GetInputAnalogStickState(EControllerAnalogStick::CAS_LeftStick, LX, LY);
-		float RX = 0.0f;
-		float RY = 0.0f;
-		//PC->GetInputAnalogStickState(EControllerAnalogStick::CAS_RightStick, RX, RY);
-
-		UE_LOG(LogTemp, Warning, TEXT("L: (%f, %f), R: (%f, %f)"), LX, LY, RX, RY);
-	}
+    GetWorld()->DeltaTimeSeconds;
+    if(physicsReady)
+	    ApplyForces();
 }
 
-// Main simulation function
-void UTNano::SimulatePhysics()
+bool UTNano::ShouldAutoStabilize() const
 {
-	CalculateThrottle();
-	CalculateThrustForces();
-	DistributeForces();
-	//CheckSpecialConditions();
+    if (!DroneBody) return false;
+
+    float Altitude = DroneBody->GetComponentLocation().Z;
+    bool IsAboveThreshold = Altitude > AutoStabilizeAltitude;
+
+    bool NoPitchInput = FMath::IsNearlyZero(Pitch, 0.05f);
+    bool NoRollInput = FMath::IsNearlyZero(Roll, 0.05f);
+
+    return IsAboveThreshold && NoPitchInput && NoRollInput;
 }
 
-void UTNano::CalculateThrottle()
+void UTNano::ApplyForces()
 {
-	MotorThrottle[0] = FMath::Clamp((RightGimbleLongitudal + PitchScale * LeftGimbleLongitudal - RollScale * LeftGimbleLateral - YawScale * RightGimbleLateral), 0.0f, 1.0f);
-	MotorThrottle[1] = FMath::Clamp((RightGimbleLongitudal + PitchScale * LeftGimbleLongitudal + RollScale * LeftGimbleLateral + YawScale * RightGimbleLateral), 0.0f, 1.0f);
-	MotorThrottle[2] = FMath::Clamp((RightGimbleLongitudal - PitchScale * LeftGimbleLongitudal + RollScale * LeftGimbleLateral - YawScale * RightGimbleLateral), 0.0f, 1.0f);
-	MotorThrottle[3] = FMath::Clamp((RightGimbleLongitudal - PitchScale * LeftGimbleLongitudal - RollScale * LeftGimbleLateral + YawScale * RightGimbleLateral), 0.0f, 1.0f);
+    if (!DroneBody || !DroneBody->IsSimulatingPhysics()) return;
+    else physicsReady = false;
+
+    stabilize = ShouldAutoStabilize();
+    GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UTNano::ApplyYaw);
 }
 
-void UTNano::CalculateThrustForces()
+void UTNano::ApplyYaw()
 {
-	Velocity = DroneBody->GetComponentVelocity();
-	ForwardAirSpeed = -FVector::DotProduct(Velocity, -DroneBody->GetUpVector());
+    if (!DroneBody || !DroneBody->IsSimulatingPhysics()) return;
 
-	PropAngleR = FMath::DegreesToRadians(FMath::Atan(PropPitch / (PI * (PropDiameter / 25.4f)))); //arc tangent of ( prop pitch in inches times ( pi divided by prop diameter converted from mm to inches))
+    const FVector Up = DroneBody->GetUpVector();
 
-	for (int x = 0; x < 4; x++)
-	{
-		// Convert to more useful units
-		CurrRPS = (MotorThrottle[x] * MaxRPMs) / 60.0f;
+    // Apply lift
+    float ClampedThrottle = FMath::Clamp(Throttle, 0.0f, 1.0f);
+    float TotalLift = ClampedThrottle * MaxThrustPerMotor * 4.0f * LiftScale;
+    DroneBody->AddForce(Up * TotalLift);
 
-		//FVector PropDirection = PropellerComponent->GetUpVector();
-		//for if props are not perfectly vertical or have different angles
-		//float ForwardAirspeed = -FVector::DotProduct(Velocity, PropDirection);
-		//if that is the case forward air speed would need to be calculated for each prop
+    // Apply yaw torque
+    float EffectiveYaw = FMath::Clamp(Yaw, -1.0f, 1.0f);
+    FVector YawTorque = Up * EffectiveYaw * YawTorqueStrength;
+    DroneBody->AddTorqueInRadians(YawTorque);
 
-		// Estimate advance ratio:
-		AdvanceRatio = ForwardAirSpeed / (CurrRPS * PropDiameter + 0.00003f); // Avoid division by zero
+    // Clamp yaw rate (Z)
+    FVector AngularVelocity = DroneBody->GetPhysicsAngularVelocityInRadians();
+    AngularVelocity.Z = FMath::Clamp(AngularVelocity.Z, -MaxYawRateRad, MaxYawRateRad);
+    DroneBody->SetPhysicsAngularVelocityInRadians(AngularVelocity, false);
 
-		// Estimate effective angle of attack from pitch and inflow
-		AoA = FMath::Atan(FMath::Tan(PropAngleR) - AdvanceRatio);
+    //UE_LOG(LogTemp, Warning, TEXT("Yaw: %.2f | AngularVel.Z: %.2f"), Yaw, AngularVelocity.Z);
 
-		// Estimate dynamic thrust coefficient
-		ThrustCoefficient = 0.1f * FMath::Sin(2.0f * AoA); // Empirical formula
-
-		// Clamp to reasonable range
-		ThrustCoefficient = FMath::Clamp(ThrustCoefficient, 0.02f, 0.12f);
-
-		// Momentum theory:
-		float Thrust = ThrustCoefficient * AirDensity * FMath::Square(CurrRPS) * FMath::Pow(PropDiameter, 4);
-
-		// Altitude correction (optional): adjust for thinner air
-		if (Altitude > 0.0f)
-		{
-			AltitudeFactor = FMath::Pow(1.0f - (0.0000225577f * Altitude), 5.25588f);
-			Thrust *= AltitudeFactor;
-		}
-
-		MotorThrust[x] = Thrust;
-	}
+    GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UTNano::ApplyPitch);
 }
 
-void UTNano::DistributeForces()
+
+void UTNano::ApplyPitch()
 {
-	if (!DroneBody) return;
+    if (!DroneBody || !DroneBody->IsSimulatingPhysics()) return;
 
-	FVector TotalForce = FVector::ZeroVector;
-	FVector TotalTorque = FVector::ZeroVector;
+    const FVector Up = DroneBody->GetUpVector();
+    const FVector Forward = DroneBody->GetForwardVector();
 
-	// Direction in which thrust is applied (adjust if drone is a pusher)
-	FVector ThrustDirection = DroneBody->GetUpVector(); // Or -GetUpVector() for pushers
+    // Apply lift
+    float ClampedThrottle = FMath::Clamp(Throttle, 0.0f, 1.0f);
+    float TotalLift = ClampedThrottle * MaxThrustPerMotor * 4.0f * LiftScale;
+    DroneBody->AddForce(Up * TotalLift);
 
-	for (int i = 0; i < 4; i++)
-	{
-		FVector Force = ThrustDirection * MotorThrust[i];
-		FVector r = MotorPositions[i] - DroneBody->GetComponentLocation(); // position relative to center of mass
+    // Apply pitch torque
+    float EffectivePitch = FMath::Clamp(Pitch, -1.0f, 1.0f);
+    FVector PitchTorque;
 
-		// Torque from thrust offset
-		TotalTorque += FVector::CrossProduct(r, Force);
+    if (stabilize)
+    {
+        FVector LocalUp = DroneBody->GetUpVector();
+        FVector WorldUp = FVector::UpVector;
 
-		// Torque from propeller spin (yaw)
-		float SpinYawTorque = MotorThrust[i] * SpinDirection[i] * TorqueFactor;
-		TotalTorque += ThrustDirection * SpinYawTorque;
+        FVector TorqueDirection = FVector::CrossProduct(LocalUp, WorldUp);
+        FVector PitchAxis = DroneBody->GetRightVector();
 
-		TotalForce += Force;
-	}
-	//UE_LOG(LogTemp, Warning, TEXT("TotalForce: %s"), *TotalForce.ToString());
+        float PitchCorrectionStrength = FVector::DotProduct(TorqueDirection, PitchAxis);
+        FVector TargetTorque = PitchAxis * PitchCorrectionStrength * StabilizeTorqueStrength;
+
+        // Smooth torque application
+        SmoothedPitchTorque = FMath::VInterpTo(SmoothedPitchTorque, TargetTorque, GetWorld()->DeltaTimeSeconds, StabilizeSmoothingSpeed);
+        PitchTorque = SmoothedPitchTorque;
+    }
+    else
+    {
+        PitchTorque = Forward * EffectivePitch * PitchTorqueStrength;
+
+        SmoothedPitchTorque = FVector::ZeroVector; // Reset smoothing when user input resumes
+    }
+
+    DroneBody->AddTorqueInRadians(PitchTorque);
 
 
-	// Apply to physics body
-	DroneBody->AddForce(TotalForce);
-	DroneBody->AddTorqueInRadians(TotalTorque);
+    // Clamp pitch rate (X)
+    FVector AngularVelocity = DroneBody->GetPhysicsAngularVelocityInRadians();
+    AngularVelocity.X = FMath::Clamp(AngularVelocity.X, -MaxPitchRateRad, MaxPitchRateRad);
+    DroneBody->SetPhysicsAngularVelocityInRadians(AngularVelocity, false);
+
+    //UE_LOG(LogTemp, Warning, TEXT("Pitch: %.2f | AngularVel.X: %.2f"), Pitch, AngularVelocity.X);
+
+    GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UTNano::ApplyRoll);
+}
+
+void UTNano::ApplyRoll()
+{
+    if (!DroneBody || !DroneBody->IsSimulatingPhysics()) return;
+
+    const FVector Up = DroneBody->GetUpVector();
+    const FVector Right = DroneBody->GetRightVector();
+
+    // Apply lift
+    float ClampedThrottle = FMath::Clamp(Throttle, 0.0f, 1.0f);
+    float TotalLift = ClampedThrottle * MaxThrustPerMotor * 4.0f * LiftScale;
+    DroneBody->AddForce(Up * TotalLift);
+
+    // Apply roll torque
+    float EffectiveRoll = FMath::Clamp(Roll, -1.0f, 1.0f);
+    FVector RollTorque;
+
+    if (stabilize)
+    {
+        FVector LocalUp = DroneBody->GetUpVector();
+        FVector WorldUp = FVector::UpVector;
+
+        FVector TorqueDirection = FVector::CrossProduct(LocalUp, WorldUp);
+        FVector RollAxis = DroneBody->GetForwardVector();
+
+        float RollCorrectionStrength = FVector::DotProduct(TorqueDirection, RollAxis);
+        FVector TargetTorque = RollAxis * RollCorrectionStrength * StabilizeTorqueStrength;
+
+        // Smooth torque application
+        SmoothedRollTorque = FMath::VInterpTo(SmoothedRollTorque, TargetTorque, GetWorld()->DeltaTimeSeconds, StabilizeSmoothingSpeed);
+        RollTorque = SmoothedRollTorque;
+    }
+    else
+    {
+        RollTorque = -Right * EffectiveRoll * RollTorqueStrength;
+
+        SmoothedRollTorque = FVector::ZeroVector; // Reset smoothing when user input resumes
+    }
+
+    DroneBody->AddTorqueInRadians(RollTorque);
+
+
+    // Clamp roll rate (Y)
+    FVector AngularVelocity = DroneBody->GetPhysicsAngularVelocityInRadians();
+    AngularVelocity.Y = FMath::Clamp(AngularVelocity.Y, -MaxRollRateRad, MaxRollRateRad);
+    DroneBody->SetPhysicsAngularVelocityInRadians(AngularVelocity, false);
+
+    //UE_LOG(LogTemp, Warning, TEXT("Roll: %.2f | AngularVel.Y: %.2f"), Roll, AngularVelocity.Y);
+
+    // Final step in cycle
+    physicsReady = true;
 }
