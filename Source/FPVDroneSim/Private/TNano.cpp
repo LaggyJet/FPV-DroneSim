@@ -68,7 +68,7 @@ void UTNano::OnThrottle(const FInputActionInstance& Instance)
 	else
 		Throttle = FMath::Clamp(throttle, ThrottleRange[0], ThrottleRange[1]);
 
-	UE_LOG(LogTemp, Warning, TEXT("Throttle: %.2f | Clamped: %.2f"), throttle, Throttle);
+	//UE_LOG(LogTemp, Warning, TEXT("Throttle: %.2f | Clamped: %.2f"), throttle, Throttle);
 }
 
 // Handle pitch input (-0.65 to 0.65)
@@ -86,7 +86,9 @@ void UTNano::OnRoll(const FInputActionInstance& Instance)
 // Handle yaw input (-0.8 to 0.8)
 void UTNano::OnYaw(const FInputActionInstance& Instance)
 {
+	const float Raw = Instance.GetValue().GetMagnitude();
 	Yaw = FMath::Clamp(Instance.GetValue().GetMagnitude() * 2.0f - 1.0f, -0.8f, 0.8f);
+	UE_LOG(LogTemp, Warning, TEXT("Yaw: %.2f | Clamped: %.2f"), Raw, Yaw);
 }
 
 // Main tick function
