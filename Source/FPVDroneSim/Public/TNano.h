@@ -46,12 +46,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Stabilization")
 	float StabilizeSmoothingSpeed = 5.0f;
 	bool stabilize;
+	FVector AngularVelocity;
 
 	const int SpinDirection[4] = { +1, -1, +1, -1 }; // CW or CCW for motors
 	const float SmoothedThrottle = 0.0f; // Current throttle being applied (smoothed)
 
 
-	float Throttle = 0.0f;
+	float Throttle = 0.25f;
+	FVector2D ThrottleRange = FVector2D(0.45f, 0.65f);
 	float Pitch = 0.0f;
 	float Roll = 0.0f;
 	float Yaw = 0.0f;
