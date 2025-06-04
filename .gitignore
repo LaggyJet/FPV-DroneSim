@@ -1,5 +1,6 @@
 #ignore files that may be very large
 *.csv
+*.ply
 
 # Visual Studio 2015 user specific files
 .vs/
