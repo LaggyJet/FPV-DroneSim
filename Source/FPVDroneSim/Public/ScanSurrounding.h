@@ -2,6 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Components/SceneComponent.h"
+#include "InputActionValue.h"
+#include "GameFramework/PlayerController.h"
+#include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
+#include "InputAction.h"
 #include "ScanSurrounding.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnScanStart);
@@ -21,6 +27,9 @@ class FPVDRONESIM_API UScanSurrounding : public USceneComponent {
 
 		UPROPERTY(BlueprintAssignable)
 		FOnScanStart OnScanStart;
+
+		UPROPERTY(EditAnywhere)
+		UInputAction* IA_StartScanning;
 
 		virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 

@@ -14,6 +14,10 @@ void UScanSurrounding::BeginPlay() {
 	lastYaw = GetOwner()->GetActorRotation().Yaw;
 	bScanComplete = false;
 	bIsScanning = true;
+
+    APlayerController* PC = Cast<APlayerController>(GetWorld()->GetFirstPlayerController());
+    auto* InputComp = Cast<UEnhancedInputComponent>(PC->InputComponent);
+    if (IA_StartScanning) InputComp->BindAction(IA_StartScanning, ETriggerEvent::Triggered, this, &UScanSurrounding::StartScan);
 }
 
 void UScanSurrounding::StartScan() {
@@ -68,7 +72,7 @@ void UScanSurrounding::HandleScan(FVector StartPoint) {
         AActor* Owner = GetOwner();
         if (!Owner || IsBeingDestroyed()) break;
         const FVector StartLocation = Owner->GetActorLocation();
-        const FVector Forward = Owner->GetActorForwardVector();
+        const FVector Forward = Owner->GetActorRightVector();
         const float ConeHalfAngleDegrees = 15.0f;
         const float RayLength = 800.f;
         UWorld* World = GetWorld();
