@@ -28,7 +28,8 @@ class FPVDRONESIM_API UScanSurrounding : public USceneComponent {
 		virtual void BeginPlay() override;
 
 	private:
-		bool bIsScanning = false;
+		FThreadSafeBool bIsScanning = false;
+		FThreadSafeBool bIsScanRunning = false;
 		bool bScanComplete = false;
 		float lastYaw = 0.f;
 		TSet<int32> VisitedAngles;

@@ -33,6 +33,11 @@ def main():
         for p in points:
             f.write(f"{p[0]:.3f} {p[1]:.3f} {p[2]:.3f}\n")
     print(f"Saved scan_output.ply in {scan_dir} with {len(points)} points")
+    try:
+        os.remove(csv_path)
+        print(f"Deleted {csv_path}")
+    except Exception as e:
+        print(f"Failed to delete {csv_path}: {e}")
 
 if __name__ == "__main__":
     main()
