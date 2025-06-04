@@ -1,7 +1,7 @@
 #include "TNano.h"
 
 // Constants for drone lift and torque strengths
-constexpr float LiftScale = 8.1f;
+constexpr float LiftScale = 8.3f;
 constexpr float YawTorqueStrength = 75.0f;
 constexpr float PitchTorqueStrength = 125.0f;
 constexpr float RollTorqueStrength = 125.0f;
