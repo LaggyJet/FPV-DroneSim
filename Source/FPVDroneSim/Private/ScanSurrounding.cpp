@@ -2,6 +2,9 @@
 #include "CheckpointManager.h"
 #include "Containers/Set.h"
 #include "EngineUtils.h"
+#include "Misc/Paths.h"
+#include "HAL/PlatformProcess.h"
+#include "Async/Async.h"
 
 UScanSurrounding::UScanSurrounding() { PrimaryComponentTick.bCanEverTick = true; }
 
@@ -17,29 +20,36 @@ void UScanSurrounding::StartScan() {
 	bIsScanning = true;
 	bScanComplete = false;
 	VisitedAngles.Reset();
-	if (AActor* Owner = GetOwner())
+	AActor* Owner = GetOwner();
+	if (Owner)
 		lastYaw = Owner->GetActorRotation().Yaw;
 	OnScanStart.Broadcast();
+	FVector InitialLocation = Owner ? Owner->GetActorLocation() : FVector::ZeroVector;
+	Async(EAsyncExecution::Thread, [this, InitialLocation]() { HandleScan(InitialLocation); });
 }
 
 void UScanSurrounding::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) {
 	if (IsBeingDestroyed() || !GetOwner()) return;
-
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!bIsScanning || bScanComplete) return;
+	HandleSpinning();
+}
 
-	if (!bIsScanning || bScanComplete)
-		return;
-
+void UScanSurrounding::HandleSpinning() {
 	AActor* owner = GetOwner();
-	if (!owner)
-		return;
-
-	float curYaw = owner->GetActorRotation().Yaw;
+	if (!owner) return;
+	const float curYaw = FMath::Wrap(float(owner->GetActorRotation().Yaw), 0.f, 360.f);
+	const float prevYaw = FMath::Wrap(lastYaw, 0.f, 360.f);
+	const float delta = FMath::FindDeltaAngleDegrees(prevYaw, curYaw);
+	const int32 stepCount = FMath::CeilToInt(FMath::Abs(delta) / SegmentSizeDegrees);
+	const float direction = (delta >= 0.0f) ? 1.0f : -1.0f;
+	for (int32 step = 0; step <= stepCount; ++step) {
+		float interpYaw = FMath::Wrap(prevYaw + direction * step * SegmentSizeDegrees, 0.f, 360.f);
+		int32 segment = FMath::FloorToInt(interpYaw / SegmentSizeDegrees);
+		VisitedAngles.Add(segment);
+	}
 	lastYaw = curYaw;
-	float normalizedYaw = FMath::Fmod(curYaw + 360.0f, 360.0f);
-	int32 segment = FMath::FloorToInt(normalizedYaw / 10.0f);
-	VisitedAngles.Add(segment);
-	if (VisitedAngles.Num() >= 36) {
+	if (VisitedAngles.Num() >= RequiredSegmentCount) {
 		bScanComplete = true;
 		bIsScanning = false;
 		for (TActorIterator<ACheckpointManager> It(GetWorld()); It; ++It) {
@@ -49,4 +59,56 @@ void UScanSurrounding::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 			}
 		}
 	}
+}
+
+void UScanSurrounding::HandleScan(FVector StartPoint) {
+    TArray<FVector> Points;
+    Points.Add(StartPoint);
+    while (bIsScanning) {
+        AActor* Owner = GetOwner();
+        if (!Owner || IsBeingDestroyed()) break;
+        const FVector StartLocation = Owner->GetActorLocation();
+        const FVector Forward = Owner->GetActorForwardVector();
+        const float ConeHalfAngleDegrees = 15.0f;
+        const float RayLength = 800.f;
+        UWorld* World = GetWorld();
+        if (!World) break;
+        const FVector RandomDir = FMath::VRandCone(Forward, FMath::DegreesToRadians(ConeHalfAngleDegrees));
+        const FVector End = StartLocation + RandomDir * RayLength;
+        FHitResult Hit;
+        FCollisionQueryParams Params;
+        Params.AddIgnoredActor(Owner);
+        if (World->LineTraceSingleByChannel(Hit, StartLocation, End, ECC_Visibility, Params))
+            Points.Add(Hit.ImpactPoint);
+        #if WITH_EDITOR
+                if (GEngine) {
+                    AsyncTask(ENamedThreads::GameThread, [World, StartLocation, End, Hit]() {
+                        DrawDebugLine(World, StartLocation, End, FColor::Green, false, 0.05f);
+                        if (Hit.bBlockingHit)
+                            DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, 0.05f);
+                        });
+                }
+        #endif
+    }
+    FString CsvPath = FPaths::ProjectContentDir() / TEXT("Scripts/scan_points.csv");
+    FString CsvContent = TEXT("X,Y,Z\n");
+    for (const FVector& Point : Points)
+        CsvContent += FString::Printf(TEXT("%.3f,%.3f,%.3f\n"), Point.X, Point.Y, Point.Z);
+    FFileHelper::SaveStringToFile(CsvContent, *CsvPath);
+    FString PythonExe = FPaths::ProjectContentDir() / TEXT("ThirdParty/Python/python.exe");
+    FString ScriptPath = FPaths::ProjectContentDir() / TEXT("Scripts/CreateScan.py");
+    FString Params = FString::Printf(TEXT("\"%s\""), *ScriptPath);
+    void* PipeRead = nullptr;
+    void* PipeWrite = nullptr;
+    FPlatformProcess::CreatePipe(PipeRead, PipeWrite);
+    FProcHandle Proc = FPlatformProcess::CreateProc(*PythonExe, *Params, true, false, false, nullptr, 0, nullptr, PipeWrite);
+    FPlatformProcess::ClosePipe(nullptr, PipeWrite);
+    FString Output;
+    while (FPlatformProcess::IsProcRunning(Proc)) {
+        Output += FPlatformProcess::ReadPipe(PipeRead);
+        FPlatformProcess::Sleep(0.01f);
+    }
+    Output += FPlatformProcess::ReadPipe(PipeRead);
+    FPlatformProcess::ClosePipe(PipeRead, nullptr);
+    UE_LOG(LogTemp, Warning, TEXT("Python Output: %s"), *Output);
 }

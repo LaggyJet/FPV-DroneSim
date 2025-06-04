@@ -15,14 +15,14 @@ EWeatherEnum UFPVDroneFunctionLibrary::StringToWeatherEnum(const FString& Input)
 TArray<FString> UFPVDroneFunctionLibrary::GetPlayableMaps() {
     TArray<FString> OutMapNames;
     FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-    FARFilter Filter;
+    FARFilter Filter{};
     Filter.PackagePaths.Add("/Game/Maps/Playables");
-    Filter.ClassNames.Add("/Script/Engine.World");
+    Filter.ClassPaths.Add(FTopLevelAssetPath(TEXT("/Script/Engine"), TEXT("World")));
     Filter.bRecursivePaths = true;
     TArray<FAssetData> Assets;
     AssetRegistryModule.Get().GetAssets(Filter, Assets);
     for (const FAssetData& Asset : Assets)
-        OutMapNames.Add(Asset.PackageName.ToString());
+        OutMapNames.Add(FPackageName::GetShortName(Asset.PackageName));
     return OutMapNames;
 }
 
