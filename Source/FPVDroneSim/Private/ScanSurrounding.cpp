@@ -69,21 +69,22 @@ void UScanSurrounding::HandleSpinning() {
 void UScanSurrounding::HandleScan(FVector StartPoint) {
     TArray<FVector> Points;
     Points.Add(StartPoint);
-    while(bIsScanning) {
+    while (bIsScanning) {
         AActor* Owner = GetOwner();
         if (!Owner || IsBeingDestroyed()) break;
         const FVector StartLocation = Owner->GetActorLocation();
         const FVector Forward = Owner->GetActorRightVector();
         const float RayLength = 800.f;
-        const float VerticalFOV = 60.f; 
-        const float PitchStep = 1.0f;   
+        const float VerticalFOV = 60.f;
+        const float PitchStep = 1.0f;
         UWorld* World = GetWorld();
         if (!World) break;
+        const FVector SweepAxis = FVector::CrossProduct(Forward, FVector::UpVector).GetSafeNormal();
         static float CurrentPitch = -VerticalFOV * 0.5f;
         if (CurrentPitch > VerticalFOV * 0.5f)
             CurrentPitch = -VerticalFOV * 0.5f;
-        FRotator RotationOffset(CurrentPitch, 0.f, 0.f); 
-        FVector ScanDir = RotationOffset.RotateVector(Forward);
+        FQuat RotationQuat = FQuat(SweepAxis, FMath::DegreesToRadians(CurrentPitch));
+        FVector ScanDir = RotationQuat.RotateVector(Forward);
         FVector End = StartLocation + ScanDir * RayLength;
         FHitResult Hit;
         FCollisionQueryParams Params;
