@@ -58,6 +58,9 @@ public:
 
 	float MaxThrustPerMotor = 3.75f; // Newtons
 
+	UFUNCTION(BlueprintCallable)
+	float GetThrottle() { return Throttle; };
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupInput();
