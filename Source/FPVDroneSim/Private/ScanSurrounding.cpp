@@ -85,15 +85,6 @@ void UScanSurrounding::HandleScan(FVector StartPoint) {
         Params.AddIgnoredActor(Owner);
         if (World->LineTraceSingleByChannel(Hit, StartLocation, End, ECC_Visibility, Params))
             Points.Add(Hit.ImpactPoint);
-        #if WITH_EDITOR
-                if (GEngine) {
-                    AsyncTask(ENamedThreads::GameThread, [World, StartLocation, End, Hit]() {
-                        DrawDebugLine(World, StartLocation, End, FColor::Green, false, 0.05f);
-                        if (Hit.bBlockingHit)
-                            DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, 0.05f);
-                        });
-                }
-        #endif
     }
     FString CsvPath = FPaths::ProjectContentDir() / TEXT("Scripts/scan_points.csv");
     FString CsvContent = TEXT("X,Y,Z\n");
