@@ -53,7 +53,7 @@ public:
 
 
 	float Throttle = 0.25f;
-	FVector2D ThrottleRange = FVector2D(0.45f, 0.65f);
+	FVector2D ThrottleRange = FVector2D(0.25f, 0.95f);
 	float Pitch = 0.0f;
 	float Roll = 0.0f;
 	float Yaw = 0.0f;

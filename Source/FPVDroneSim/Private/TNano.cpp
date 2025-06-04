@@ -3,15 +3,15 @@
 // Constants for drone lift and torque strengths
 constexpr float LiftScale = 8.3f;
 constexpr float YawTorqueStrength = 75.0f;
-constexpr float PitchTorqueStrength = 125.0f;
-constexpr float RollTorqueStrength = 125.0f;
+constexpr float PitchTorqueStrength = 75.0f;
+constexpr float RollTorqueStrength = 75.0f;
 
 // Max angular velocity (in radians/sec) to prevent over-rotation
 constexpr float MaxYawRateRad = FMath::DegreesToRadians(105.0f);   // Around Z axis
-constexpr float MaxPitchRateRad = FMath::DegreesToRadians(60.5f);  // Around X axis
-constexpr float MaxRollRateRad = FMath::DegreesToRadians(60.5f);   // Around Y axis
+constexpr float MaxPitchRateRad = FMath::DegreesToRadians(50.5f);  // Around X axis
+constexpr float MaxRollRateRad = FMath::DegreesToRadians(50.5f);   // Around Y axis
 
-constexpr float AngularVelocityGain = 15.0f;
+constexpr float AngularVelocityGain = 10.0f;
 
 // Constructor
 UTNano::UTNano()
