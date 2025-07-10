@@ -12,40 +12,59 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnScanStart);
 
+USTRUCT(BlueprintType)
+struct FLidarPoint {
+    GENERATED_BODY()
+
+    public:
+        FVector location;
+        FColor color;
+
+        FLidarPoint() = default;
+        FLidarPoint(const FVector &inLocation, const FColor &inColor = FColor::Blue) : location(inLocation), color(inColor) {}
+};
+
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
 class FPVDRONESIM_API UScanSurrounding : public USceneComponent {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
-	public:
-		UScanSurrounding();
+    public:
+        UScanSurrounding();
 
-		UFUNCTION(BlueprintCallable)
-		void StartScan();
+        UFUNCTION(BlueprintCallable)
+        void StartScan();
 
-		UFUNCTION(BlueprintCallable)
-		bool IsScanComplete() const { return bScanComplete; }
+        UFUNCTION(BlueprintCallable)
+        bool IsScanComplete() const { return bScanComplete; }
 
-		UPROPERTY(BlueprintAssignable)
-		FOnScanStart OnScanStart;
+        UPROPERTY(BlueprintAssignable)
+        FOnScanStart OnScanStart;
 
-		UPROPERTY(EditAnywhere)
-		UInputAction* IA_StartScanning;
+        UPROPERTY(EditAnywhere)
+        UInputAction *IA_StartScanning = nullptr;
 
-		virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+        UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Scan Surroundings")
+        TSubclassOf<AActor> ScanPointActorClass;
 
-	protected:
-		virtual void BeginPlay() override;
+        virtual void TickComponent(float deltaTime, ELevelTick tickType, FActorComponentTickFunction *thisTickFunction) override;
 
-	private:
-		FThreadSafeBool bIsScanning = false;
-		FThreadSafeBool bIsScanRunning = false;
-		bool bScanComplete = false;
-		float lastYaw = 0.f;
-		TSet<int32> VisitedAngles;
-		const float SegmentSizeDegrees = 10.0f;
-		const int32 RequiredSegmentCount = 360 / SegmentSizeDegrees;
-		int32 ScanCounter = 0;
+    protected:
+        virtual void BeginPlay() override;
 
-		void HandleSpinning();
-		void HandleScan(FVector StartPoint);
+    private:
+        FThreadSafeBool bIsScanning = false;
+        FThreadSafeBool bIsScanRunning = false;
+        bool bScanComplete = false;
+        float lastYaw = 0.f;
+        TSet<int32> visitedAngles;
+        const float segmentSizeDegrees = 10.0f;
+        const int32 requiredSegmentCount = 360 / segmentSizeDegrees;
+        int32 scanCounter = 0;
+        TArray<AActor*> spawnedActors;
+        TSet<FVector> spawnedHitLocations;
+        TQueue<FVector, EQueueMode::Mpsc> hitQueue;
+        TQueue<AActor*, EQueueMode::Mpsc> destroyQueue;
+
+        void HandleSpinning();
+        void HandleScan(FVector startPoint);
 };

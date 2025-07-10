@@ -5,123 +5,226 @@
 #include "Misc/Paths.h"
 #include "HAL/PlatformProcess.h"
 #include "Async/Async.h"
+#include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "BakedColorMapManager.h"
 
 UScanSurrounding::UScanSurrounding() { PrimaryComponentTick.bCanEverTick = true; }
 
 void UScanSurrounding::BeginPlay() {
-	Super::BeginPlay();
-	VisitedAngles.Reset();
-	lastYaw = GetOwner()->GetActorRotation().Yaw;
-	bScanComplete = false;
-	bIsScanning = true;
-
-    APlayerController* PC = Cast<APlayerController>(GetWorld()->GetFirstPlayerController());
-    auto* InputComp = Cast<UEnhancedInputComponent>(PC->InputComponent);
-    if (IA_StartScanning) InputComp->BindAction(IA_StartScanning, ETriggerEvent::Triggered, this, &UScanSurrounding::StartScan);
+    Super::BeginPlay();
+    visitedAngles.Reset();
+    lastYaw = GetOwner() ? GetOwner()->GetActorRotation().Yaw : 0.f;
+    bScanComplete = bIsScanning = true;
+    UBakedColorMapManager::Get(GetWorld())->BakeAndSaveAllMapsIfMissing((GetWorld() ? GetWorld()->GetMapName() : TEXT("UnknownMap")), [this]() { bIsScanning = false; });
+    APlayerController *pC = Cast<APlayerController>(GetWorld()->GetFirstPlayerController());
+    if (auto *inputComp = pC ? Cast<UEnhancedInputComponent>(pC->InputComponent) : nullptr; IA_StartScanning && inputComp)
+        inputComp->BindAction(IA_StartScanning, ETriggerEvent::Triggered, this, &UScanSurrounding::StartScan);
+    for (TActorIterator<ACheckpointManager> it(GetWorld()); it; ++it) {
+        if (ACheckpointManager* manager = *it) {
+            manager->finishedMap = false;
+            break;
+        }
+    }
 }
 
 void UScanSurrounding::StartScan() {
-	if (bIsScanRunning) return;
-	bIsScanRunning = bIsScanning = true;
-	bScanComplete = false;
-	VisitedAngles.Reset();
-	AActor* Owner = GetOwner();
-	if (Owner)
-		lastYaw = Owner->GetActorRotation().Yaw;
-	OnScanStart.Broadcast();
-	FVector InitialLocation = Owner ? Owner->GetActorLocation() : FVector::ZeroVector;
-	Async(EAsyncExecution::Thread, [this, InitialLocation]() { ON_SCOPE_EXIT{ bIsScanRunning = false; }; HandleScan(InitialLocation); });
+    if (bIsScanRunning)
+        return;
+    bIsScanRunning = bIsScanning = true;
+    bScanComplete = false;
+    visitedAngles.Reset();
+    AActor *owner = GetOwner();
+    if (owner)
+        lastYaw = owner->GetActorRotation().Yaw;
+    OnScanStart.Broadcast();
+    FVector InitialLocation = owner ? owner->GetActorLocation() : FVector::ZeroVector;
+    Async(EAsyncExecution::Thread, [this, InitialLocation]() { ON_SCOPE_EXIT{ bIsScanRunning = false; }; HandleScan(InitialLocation); });
 }
 
-void UScanSurrounding::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) {
-	if (IsBeingDestroyed() || !GetOwner()) return;
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	if (!bIsScanning || bScanComplete) return;
-	HandleSpinning();
+void UScanSurrounding::TickComponent(float deltaTime, ELevelTick tickType, FActorComponentTickFunction *thisTickFunction) {
+    if (IsBeingDestroyed() || !GetOwner()) 
+        return;
+    Super::TickComponent(deltaTime, tickType, thisTickFunction);
+    const int32 maxDestroysPerFrame = 500;
+    int32 destroyCount = 0;
+    AActor *actorToDestroy;
+    while (destroyCount++ < maxDestroysPerFrame && destroyQueue.Dequeue(actorToDestroy))
+        if (actorToDestroy && !actorToDestroy->IsPendingKillPending())
+            actorToDestroy->Destroy();
+    if (!bIsScanning || bScanComplete) 
+        return;
+    HandleSpinning();
+    FVector hitLoc;
+    while (hitQueue.Dequeue(hitLoc)) {
+        if (!spawnedHitLocations.Contains(hitLoc)) {
+            if (AActor *spawned = GetWorld()->SpawnActor<AActor>(ScanPointActorClass, hitLoc, FRotator::ZeroRotator)) {
+                spawnedActors.Add(spawned);
+                spawnedHitLocations.Add(hitLoc);
+            }
+        }
+    }
 }
 
 void UScanSurrounding::HandleSpinning() {
-	AActor* owner = GetOwner();
-	if (!owner) return;
-	const float curYaw = FMath::Wrap(float(owner->GetActorRotation().Yaw), 0.f, 360.f);
-	const float prevYaw = FMath::Wrap(lastYaw, 0.f, 360.f);
-	const float delta = FMath::FindDeltaAngleDegrees(prevYaw, curYaw);
-	const int32 stepCount = FMath::CeilToInt(FMath::Abs(delta) / SegmentSizeDegrees);
-	const float direction = (delta >= 0.0f) ? 1.0f : -1.0f;
-	for (int32 step = 0; step <= stepCount; ++step) {
-		float interpYaw = FMath::Wrap(prevYaw + direction * step * SegmentSizeDegrees, 0.f, 360.f);
-		int32 segment = FMath::FloorToInt(interpYaw / SegmentSizeDegrees);
-		VisitedAngles.Add(segment);
-	}
-	lastYaw = curYaw;
-	if (VisitedAngles.Num() >= RequiredSegmentCount) {
-		bScanComplete = true;
-		bIsScanning = bIsScanRunning = false;
-		for (TActorIterator<ACheckpointManager> It(GetWorld()); It; ++It) {
-			if (ACheckpointManager* Manager = *It) {
-				Manager->ScanState = EScanProgress::Completed;
-				break;
-			}
-		}
-	}
+    AActor *owner = GetOwner();
+    if (!owner) 
+        return;
+    const float curYaw = FMath::Wrap(float(owner->GetActorRotation().Yaw), 0.f, 360.f);
+    const float prevYaw = FMath::Wrap(lastYaw, 0.f, 360.f);
+    const float delta = FMath::FindDeltaAngleDegrees(prevYaw, curYaw);
+    const int32 stepCount = FMath::CeilToInt(FMath::Abs(delta) / segmentSizeDegrees);
+    const float direction = (delta >= 0.0f) ? 1.0f : -1.0f;
+    for (int32 step = 0; step <= stepCount; step++) {
+        float interpYaw = FMath::Wrap(prevYaw + direction * step * segmentSizeDegrees, 0.f, 360.f);
+        int32 segment = FMath::FloorToInt(interpYaw / segmentSizeDegrees);
+        visitedAngles.Add(segment);
+    }
+    lastYaw = curYaw;
+    if (visitedAngles.Num() >= requiredSegmentCount) {
+        bScanComplete = true;
+        bIsScanning = bIsScanRunning = false;
+        for (TActorIterator<ACheckpointManager> it(GetWorld()); it; ++it) {
+            if (ACheckpointManager *manager = *it) {
+                manager->ScanState = EScanProgress::Completed;
+                break;
+            }
+        }
+    }
 }
 
-void UScanSurrounding::HandleScan(FVector StartPoint) {
-    TArray<FVector> Points;
-    Points.Add(StartPoint);
+void UScanSurrounding::HandleScan(FVector startPoint) {
+    TArray<FLidarPoint> points;
+    points.Add(FLidarPoint(startPoint));
+    static float currentPitch = -135.f * 0.5f;
+    UBakedColorMapManager* colorMapMgr = UBakedColorMapManager::Get(GetWorld());
+    if (!colorMapMgr)
+        return;
+
+    const int32 mapSize = colorMapMgr->GetBakeResolution();
+
     while (bIsScanning) {
-        AActor* Owner = GetOwner();
-        if (!Owner || IsBeingDestroyed()) break;
-        const FVector StartLocation = Owner->GetActorLocation();
-        const FVector Forward = Owner->GetActorRightVector();
-        const float RayLength = 800.f;
-        const float VerticalFOV = 60.f;
-        const float PitchStep = 1.0f;
-        UWorld* World = GetWorld();
-        if (!World) break;
-        const FVector SweepAxis = FVector::CrossProduct(Forward, FVector::UpVector).GetSafeNormal();
-        static float CurrentPitch = -VerticalFOV * 0.5f;
-        if (CurrentPitch > VerticalFOV * 0.5f)
-            CurrentPitch = -VerticalFOV * 0.5f;
-        FQuat RotationQuat = FQuat(SweepAxis, FMath::DegreesToRadians(CurrentPitch));
-        FVector ScanDir = RotationQuat.RotateVector(Forward);
-        FVector End = StartLocation + ScanDir * RayLength;
-        FHitResult Hit;
-        FCollisionQueryParams Params;
-        Params.AddIgnoredActor(Owner);
-        if (World->LineTraceSingleByChannel(Hit, StartLocation, End, ECC_Visibility, Params))
-            Points.Add(Hit.ImpactPoint);
-        #if WITH_EDITOR
-                if (GEngine) {
-                    AsyncTask(ENamedThreads::GameThread, [World, StartLocation, End, Hit]() {
-                        DrawDebugLine(World, StartLocation, End, FColor::Blue, false, 0.05f);
-                        if (Hit.bBlockingHit)
-                            DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, 0.05f);
-                    });
+        AActor* owner = GetOwner();
+        if (!owner || IsBeingDestroyed())
+            break;
+
+        if (currentPitch > 135.f * 0.5f)
+            currentPitch = -135.f * 0.5f;
+
+        FVector start = owner->GetActorLocation();
+        FVector forward = owner->GetActorRightVector();
+        FVector axis = FVector::CrossProduct(forward, FVector::UpVector).GetSafeNormal();
+        FVector dir = FQuat(axis, FMath::DegreesToRadians(currentPitch)).RotateVector(forward);
+        FVector end = start + dir * 800.f;
+
+        FHitResult hit;
+        FCollisionQueryParams params(TEXT("LidarTrace"), true, owner);
+        params.bReturnPhysicalMaterial = params.bReturnFaceIndex = params.bTraceComplex = true;
+
+        if (!GetWorld()->LineTraceSingleByChannel(hit, start, end, ECC_Visibility, params)) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        FVector2D uv;
+        if (!UGameplayStatics::FindCollisionUV(hit, 0, uv)) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        UStaticMeshComponent *meshComp = Cast<UStaticMeshComponent>(hit.GetComponent());
+        if (!meshComp) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        UStaticMesh *mesh = meshComp->GetStaticMesh();
+        if (!mesh) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        int32 materialIndex = INDEX_NONE;
+        FStaticMeshRenderData *renderData = mesh->GetRenderData();
+        if (renderData && renderData->LODResources.Num() > 0) {
+            const FStaticMeshLODResources &lod = renderData->LODResources[0];
+            for (const FStaticMeshSection &section : lod.Sections) {
+                int32 firstTri = section.FirstIndex / 3;
+                if (hit.FaceIndex >= firstTri && hit.FaceIndex < firstTri + (int32)section.NumTriangles) {
+                    materialIndex = section.MaterialIndex;
+                    break;
                 }
-        #endif
-        CurrentPitch += PitchStep;
+            }
+        }
+
+        if (materialIndex == INDEX_NONE)
+            materialIndex = 0;
+
+        UMaterialInterface *mat = meshComp->GetMaterial(materialIndex);
+        if (!mat) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        const TArray<FColor> *colorMap = colorMapMgr->GetColorMap(mesh, mat);
+        if (!colorMap) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        float U = FMath::Fmod(uv.X, 1.0f); 
+        if (U < 0) 
+            U += 1.0f;
+        float V = FMath::Fmod(uv.Y, 1.0f); 
+        if (V < 0) 
+            V += 1.0f;
+
+        int32 x = FMath::Clamp(FMath::FloorToInt(U * mapSize), 0, mapSize - 1);
+        int32 y = FMath::Clamp(FMath::FloorToInt(V * mapSize), 0, mapSize - 1);
+        int32 colorIndex = y * mapSize + x;
+
+        if (!colorMap->IsValidIndex(colorIndex)) {
+            currentPitch += 1.f;
+            continue;
+        }
+
+        points.Add(FLidarPoint(hit.ImpactPoint, (*colorMap)[colorIndex]));
+        hitQueue.Enqueue(hit.ImpactPoint);
+        currentPitch += 1.f;
     }
-    FString CsvPath = FPaths::ProjectContentDir() / TEXT("Scripts/scan_points.csv");
-    FString CsvContent = TEXT("X,Y,Z\n");
-    for (const FVector& Point : Points)
-        CsvContent += FString::Printf(TEXT("%.3f,%.3f,%.3f\n"), Point.X, Point.Y, Point.Z);
-    FFileHelper::SaveStringToFile(CsvContent, *CsvPath);
-    FString PythonExe = FPaths::ProjectContentDir() / TEXT("ThirdParty/Python/python.exe");
-    FString ScriptPath = FPaths::ProjectContentDir() / TEXT("Scripts/CreateScan.py");
-    FString Params = FString::Printf(TEXT("\"%s\" %d"), *ScriptPath, ScanCounter);
-    void* PipeRead = nullptr;
-    void* PipeWrite = nullptr;
-    FPlatformProcess::CreatePipe(PipeRead, PipeWrite);
-    FProcHandle Proc = FPlatformProcess::CreateProc(*PythonExe, *Params, true, false, false, nullptr, 0, nullptr, PipeWrite);
-    FPlatformProcess::ClosePipe(nullptr, PipeWrite);
-    FString Output;
-    while (FPlatformProcess::IsProcRunning(Proc)) {
-        Output += FPlatformProcess::ReadPipe(PipeRead);
-        FPlatformProcess::Sleep(0.01f);
-    }
-    Output += FPlatformProcess::ReadPipe(PipeRead);
-    FPlatformProcess::ClosePipe(PipeRead, nullptr);
-    UE_LOG(LogTemp, Warning, TEXT("Python Output: %s"), *Output);
-    ScanCounter++;
+
+    AsyncTask(ENamedThreads::GameThread, [this]() {
+        for (AActor *actor : spawnedActors) {
+            if (actor && !actor->IsPendingKillPending()) {
+                destroyQueue.Enqueue(actor);
+                actor->SetActorHiddenInGame(true);
+                actor->UpdateComponentVisibility();
+            }
+        }
+        spawnedActors.Empty();
+        spawnedHitLocations.Reset();
+    });
+
+    Async(EAsyncExecution::Thread, [points = MoveTemp(points), scanCounter = scanCounter]() {
+        FString txtContent;
+        for (int i = 0; i < points.Num(); i++) {
+            const FLidarPoint &point = points[i];
+            txtContent += FString::Printf(TEXT("%.3f %.3f %.3f %d %d %d\n"), point.location.X, point.location.Y, point.location.Z, point.color.R, point.color.G, point.color.B);
+            if (i % 250 == 0)
+                FPlatformProcess::Sleep(0.0005f);
+        }
+
+        FString txtPath = FPaths::ProjectSavedDir() / TEXT("ScannedData/scan_points_") + FString::FromInt(scanCounter) + TEXT(".txt");
+        FString txtDir = FPaths::GetPath(txtPath);
+        if (!IFileManager::Get().DirectoryExists(*txtDir))
+            IFileManager::Get().MakeDirectory(*txtDir, true);
+
+        FFileHelper::SaveStringToFile(txtContent, *txtPath);
+    });
+
+    scanCounter++;
 }

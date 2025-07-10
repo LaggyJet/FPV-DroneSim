@@ -8,23 +8,17 @@
 #include "CheckpointManager.generated.h"
 
 UCLASS()
-class FPVDRONESIM_API ACheckpointManager : public AActor
-{
+class FPVDRONESIM_API ACheckpointManager : public AActor {
 	GENERATED_BODY()
 	
-public:	
-	// Sets default values for this actor's properties
-	ACheckpointManager();
+	public:	
+		ACheckpointManager();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan")
-	EScanProgress ScanState;
+		virtual void Tick(float deltaTime) override;
 
-protected:
-	// Called when the game starts or when spawned
-	virtual void BeginPlay() override;
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan")
+		EScanProgress ScanState;
 
-public:	
-	// Called every frame
-	virtual void Tick(float DeltaTime) override;
-
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan")
+		bool finishedMap = false;
 };
